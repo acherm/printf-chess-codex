@@ -173,6 +173,31 @@ Purity modes:
 - `--purity hybrid`: allows comparison/boolean operators (reported in cheat audit and purity score as hybrid POP)
 - VM-purity audit is independent: if non-trivial expressions are still evaluated in C argument expressions,
   generated output is classified as hybrid POP even in `--purity strict` mode
+- optional `--vm-pure`: hard-rejects any C-evaluated expression in assignments/print gates
+  (only constants or raw `d[idx]` are allowed there)
+- optional `--vm-pure-backend simple|micro|phase|vm`:
+  - `simple` (default): direct vm-pure lowering; expressions must already be raw constants/`d[idx]`
+  - `micro` (experimental): attempts boolean-expression lowering into `%hhn` micro-ops inside `fmt`
+  - `phase` (experimental): executes one source statement per runtime phase (`switch(pc)`), prioritizing correctness for read-after-write dependencies
+  - `vm` (experimental): lowers boolean/state expressions to `%hhn` micro-phases and writes tape `VM_PC_LO/VM_PC_HI` plus `vm_fmt` pointer bytes via `%hhn` (no C expression eval); loop dispatch is a single `printf(vm_fmt, ...)`
+- optional `--reject-delta-compiler`: hard-rejects non-vm-pure backend C-side write-delta construction
+  (`%w[i] - %w[i-1]`)
+- host-snapshot input note: feeding many input bytes per tick is classified as host-driven hybrid POP
+- in `--vm-pure`, multi-write lowering uses a counter-reset template (no `%w[i]-%w[i-1]`)
+- current status (2026-03): `--vm-pure-backend vm` can report `10/10 (POP-pure)` for supported non-host-snapshot programs
+
+Experimental notes (`--vm-pure-backend micro|phase|vm`):
+- designed to explore moving expression semantics from C into `printf` micro-ops
+- currently boolean-oriented (`|`, `&`, `^`, and subtraction chains rooted at `1`) and still under validation
+- expect large generated format strings/output volume; treat results as experimental
+- safety rule: rejects read-after-write dependencies within one source tick
+  (single-call `printf` pre-evaluates varargs, so those dependencies are semantically unsafe)
+- `phase` backend keeps read-after-write correctness by sequencing statements across phases, but this is explicitly hybrid:
+  C dispatches phases and evaluates expressions each phase (not strict POP-pure)
+- `vm` backend removes C expression evaluation for supported boolean/state forms and avoids C state-indexed dispatch
+- `vm` backend runtime shape is canonical: `while (*d) { tape-in(size=d[VM_BOUNDARY]); printf(vm_fmt, ...); }`
+- `vm` backend still depends on host ABI details for pointer-byte writes and uses C raw IO (`fread`) as Gate-E tape-in
+- `vm` backend currently uses a 16-bit tape PC (`VM_PC_LO/VM_PC_HI`), so it supports at most 65536 micro-phases
 
 Build generated programs:
 
@@ -197,7 +222,7 @@ Or run the helper:
 - one canonical loop:
   - `while (d[0]) { ... }`
 - loop statements:
-  - `pop_read_byte(IDX);` or `pop_read_byte(d[IDX]);` (optional, at most one, first in loop body)
+  - `pop_read_byte(IDX);` or `pop_read_byte(d[IDX]);` (optional, any number, first in loop body)
   - `d[IDX] = <expr>;`
   - `pop_print_if(<expr>, "literal");`
   - `pop_print("literal");`
@@ -208,8 +233,9 @@ Or run the helper:
   - comparisons: `==`, `!=`, `<`, `<=`, `>`, `>=` (result is `0/1`)
   - integers, enum constants, `d[IDX]`, parentheses
 - `pop_read_byte(...)` semantics:
-  - generated runtime reads one raw byte via `getchar()` each tick and stores it into that tape byte before `printf`
+  - generated runtime reads one raw byte via `getchar()` per `pop_read_byte(...)` call each tick
   - EOF is stored as raw byte `(signed char)EOF`; stopping behavior must be encoded in tape logic
+  - in `--purity strict`, derived semantics on raw input bytes in C expressions are rejected
 
 ### Generated compliance artifacts
 
@@ -231,7 +257,7 @@ A 10-program benchmark suite is available under [`bench/README.md`](bench/README
 Input-aware tic-tac-toe stream demo:
 
 ```bash
-./tools/c2pop.py examples/showcase_tictactoe_input_subset.c -o generated
+./tools/c2pop.py examples/showcase_tictactoe_input_subset.c -o generated --purity hybrid
 cc -std=c11 -Wall -Wextra -O2 generated/showcase_tictactoe_input_subset.pop.c -o /tmp/showcase_tictactoe_input_subset.pop
 printf 'XOXOOXXOX' | /tmp/showcase_tictactoe_input_subset.pop
 ```
@@ -252,14 +278,49 @@ Keys:
 - `1..9` place on that cell
 - `q` quit
 
-Strict-mode playable tic-tac-toe (no comparisons in source subset):
+Strict-mode playable tic-tac-toe with tape input protocol (`--vm-pure-backend vm`):
 
 ```bash
-./tools/c2pop.py examples/showcase_tictactoe_playable_strict_subset.c -o generated --purity strict
+./tools/c2pop.py examples/showcase_tictactoe_playable_strict_subset.c -o generated --purity strict --vm-pure --vm-pure-backend vm
 cc -std=c11 -Wall -Wextra -O2 generated/showcase_tictactoe_playable_strict_subset.pop.c -o /tmp/showcase_tictactoe_playable_strict_subset.pop
-printf '12539' | /tmp/showcase_tictactoe_playable_strict_subset.pop
+./tools/ttt_key_to_tape.py 12539 | /tmp/showcase_tictactoe_playable_strict_subset.pop
 ```
 
 Note:
-- this is strict *subset* compliant (`--purity strict`) but still hybrid under VM-purity audit,
-  because non-trivial per-tick expressions are evaluated in C argument expressions.
+- key decoding is moved outside generated C (raw tape-in only inside loop)
+- runtime enforces one-hot selection; multi-cell packets are rejected as illegal
+- this path is currently reported as `10/10 (POP-pure)` by the generated compliance report
+
+Legacy host-snapshot tic-tac-toe variant (accepted by `--vm-pure`, but hybrid by design):
+
+```bash
+./tools/c2pop.py examples/showcase_tictactoe_playable_vm_pure_subset.c -o generated --purity strict --vm-pure --vm-pure-backend vm
+cc -std=c11 -Wall -Wextra -O2 generated/showcase_tictactoe_playable_vm_pure_subset.pop.c -o /tmp/showcase_tictactoe_playable_vm_pure_subset.pop
+./tools/ttt_vm_pure_packets.py 12539 | /tmp/showcase_tictactoe_playable_vm_pure_subset.pop
+```
+
+Notes:
+- game semantics (move validation, turn/win/draw) are produced externally by `tools/ttt_vm_pure_packets.py`
+- in `--vm-pure`, `pop_print_if(gate, lit)` uses `gate` directly as precision, so full-string gates should use a large non-zero byte (e.g., `255`)
+- purity classification for this variant is host-driven hybrid POP (`7/10` currently)
+
+Minimal VM-pure example:
+
+```bash
+./tools/c2pop.py examples/showcase_vm_pure_tape_gate.c -o generated --purity strict --vm-pure
+cc -std=c11 -Wall -Wextra -O2 generated/showcase_vm_pure_tape_gate.pop.c -o /tmp/showcase_vm_pure_tape_gate.pop
+printf '\\377' | /tmp/showcase_vm_pure_tape_gate.pop
+```
+
+VM-backed rule-kernel example (boolean lowering in `--vm-pure-backend vm`):
+
+```bash
+./tools/c2pop.py examples/showcase_vm_pure_rule_kernel_subset.c -o generated --purity strict --vm-pure --vm-pure-backend vm
+cc -std=c11 -Wall -Wextra -O2 generated/showcase_vm_pure_rule_kernel_subset.pop.c -o /tmp/showcase_vm_pure_rule_kernel_subset.pop
+# packet: [quit][sel0][sel1][sel2][occ0][occ1][occ2][force_o]
+printf '\\001\\001\\000\\000\\000\\000\\000\\000' | /tmp/showcase_vm_pure_rule_kernel_subset.pop
+```
+
+Note:
+- supported expression lowering is currently boolean/state oriented (`|`, `&`, `^`, `1-...`) plus raw copy/constants
+- current generated artifact is reported as `10/10 (POP-pure)`
