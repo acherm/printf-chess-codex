@@ -171,6 +171,8 @@ Purity modes:
 
 - default `--purity strict`: rejects comparison/boolean operators in expressions
 - `--purity hybrid`: allows comparison/boolean operators (reported in cheat audit and purity score as hybrid POP)
+- VM-purity audit is independent: if non-trivial expressions are still evaluated in C argument expressions,
+  generated output is classified as hybrid POP even in `--purity strict` mode
 
 Build generated programs:
 
@@ -249,3 +251,15 @@ printf '12539' | /tmp/showcase_tictactoe_playable_subset.pop
 Keys:
 - `1..9` place on that cell
 - `q` quit
+
+Strict-mode playable tic-tac-toe (no comparisons in source subset):
+
+```bash
+./tools/c2pop.py examples/showcase_tictactoe_playable_strict_subset.c -o generated --purity strict
+cc -std=c11 -Wall -Wextra -O2 generated/showcase_tictactoe_playable_strict_subset.pop.c -o /tmp/showcase_tictactoe_playable_strict_subset.pop
+printf '12539' | /tmp/showcase_tictactoe_playable_strict_subset.pop
+```
+
+Note:
+- this is strict *subset* compliant (`--purity strict`) but still hybrid under VM-purity audit,
+  because non-trivial per-tick expressions are evaluated in C argument expressions.

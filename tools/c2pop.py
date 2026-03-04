@@ -73,6 +73,7 @@ class Program:
     input_idx: Optional[int]
     purity_mode: str
     has_hybrid_expr: bool
+    has_c_eval_expr: bool
     index_names: Dict[int, str]
     constants: Dict[str, int]
     loop_stmts: List[Stmt]
@@ -311,6 +312,16 @@ def expr_uses_hybrid(node: ast.AST) -> bool:
     return False
 
 
+def expr_needs_c_eval(node: ast.AST) -> bool:
+    # "Raw tape read" expressions are considered VM-pure at callsite level.
+    # Any operator/composition means C evaluates semantics each tick.
+    if isinstance(node, ast.Constant):
+        return False
+    if isinstance(node, ast.Name):
+        return False
+    return True
+
+
 def expr_ast_to_c(node: ast.AST, env: Dict[int, str], constants: Dict[str, int]) -> str:
     if isinstance(node, ast.Constant):
         if not isinstance(node.value, int):
@@ -513,6 +524,7 @@ def parse_source(path: pathlib.Path, purity_mode: str) -> Program:
                 )
 
     has_hybrid_expr = False
+    has_c_eval_expr = False
     for st in loop_stmts:
         if isinstance(st, InputStmt):
             if st.target < 0 or st.target >= tape_size:
@@ -526,9 +538,11 @@ def parse_source(path: pathlib.Path, purity_mode: str) -> Program:
                 )
             check_expr(st.expr, st.original)
             has_hybrid_expr = has_hybrid_expr or expr_uses_hybrid(st.expr)
+            has_c_eval_expr = has_c_eval_expr or expr_needs_c_eval(st.expr)
         elif isinstance(st, PrintIfStmt):
             check_expr(st.gate, st.original)
             has_hybrid_expr = has_hybrid_expr or expr_uses_hybrid(st.gate)
+            has_c_eval_expr = has_c_eval_expr or expr_needs_c_eval(st.gate)
 
     return Program(
         src_path=path,
@@ -538,6 +552,7 @@ def parse_source(path: pathlib.Path, purity_mode: str) -> Program:
         input_idx=input_idx,
         purity_mode=purity_mode,
         has_hybrid_expr=has_hybrid_expr,
+        has_c_eval_expr=has_c_eval_expr,
         index_names=index_names,
         constants=constants,
         loop_stmts=loop_stmts,
@@ -553,12 +568,13 @@ def emit_c(parsed: Program) -> str:
     has_print_if = any(kind == "if" for kind, _, _, _ in render_ops)
     has_input = parsed.input_idx is not None
     has_hybrid_expr = parsed.has_hybrid_expr
+    has_c_eval_expr = parsed.has_c_eval_expr
     # Purity score for this generated artifact under the POP rubric.
     dim_loop = 2
     dim_mut = 2 if writes else 0
-    # Hybrid expressions mean some semantics are computed in C argument expressions.
-    dim_ctrl = (1 if has_hybrid_expr else 2) if has_print_if else 0
-    dim_engine = 1 if has_hybrid_expr else 2
+    # C-evaluated expressions mean semantics are computed outside printf VM.
+    dim_ctrl = (1 if has_c_eval_expr else 2) if has_print_if else 0
+    dim_engine = 1 if has_c_eval_expr else 2
     dim_rom = 2
     total_score = dim_loop + dim_mut + dim_ctrl + dim_engine + dim_rom
     if total_score >= 9:
@@ -689,6 +705,10 @@ def emit_c(parsed: Program) -> str:
         " * - C-side semantic operators (comparison/bool): "
         + ("present (hybrid mode)" if has_hybrid_expr else "none")
     )
+    c_eval_line = (
+        " * - C-side per-tick expression evaluation (state/branch): "
+        + ("present" if has_c_eval_expr else "none")
+    )
     input_semantics_line = " * - C-side input semantics beyond raw tape-in: no"
 
     loop_src_lines = "\n".join(f" *   {quote_c_string_for_comment(st.original)}" for st in parsed.loop_stmts)
@@ -752,6 +772,7 @@ def emit_c(parsed: Program) -> str:
  * - Per-iteration helper calls: no
  * - table[d[i]] argument selections: no
 {hybrid_expr_line}
+{c_eval_line}
 {input_semantics_line}
 {tape_change_line}
  */
