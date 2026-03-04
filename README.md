@@ -96,39 +96,3 @@ gcc -std=c11 -Wall -Wextra -O2 printf_snake.c -o printf_snake
 ```
 
 This strict variant is auto-running (one-row snake).
-
-## Rust variant
-
-A Rust port is available in `src/main.rs`, still using the POP trick with
-`printf` via FFI (`extern "C"`), `%hhn`, and one control loop.
-
-- format string bytes are generated at build time by `build.rs`
-- runtime loop is still one `printf` per cycle with side-effect arguments
-
-Build and run:
-
-```bash
-cargo run
-```
-
-## Java variant (JNI bridge)
-
-Pure Java `System.out.printf` cannot emulate `%hhn` pointer writes.  
-This variant uses a tiny JNI bridge to libc `printf`, so the POP trick is kept:
-
-- Java computes chess state and next frame
-- Native C bridge executes `printf(fmt, ...)` with `%hhn` writes on `d[]`
-
-Files:
-- `java/src/PrintfChessJava.java`
-- `java/native/printfbridge.c`
-- `java/build.sh`
-
-Build and run:
-
-```bash
-./java/build.sh
-java -Dprintfbridge.path=java/build/libprintfbridge.dylib -cp java/build PrintfChessJava
-```
-
-On Linux, use `libprintfbridge.so` instead of `.dylib`.
