@@ -180,6 +180,10 @@ Purity modes:
   - `micro` (experimental): attempts boolean-expression lowering into `%hhn` micro-ops inside `fmt`
   - `phase` (experimental): executes one source statement per runtime phase (`switch(pc)`), prioritizing correctness for read-after-write dependencies
   - `vm` (experimental): lowers boolean/state expressions to `%hhn` micro-phases and writes tape `VM_PC_LO/VM_PC_HI` plus `vm_fmt` pointer bytes via `%hhn` (no C expression eval); loop dispatch is a single `printf(vm_fmt, ...)`
+- optional `--vm-immutable-fmt` (requires `--vm-pure --vm-pure-backend vm`):
+  - forbids vm format-pointer rewriting (`vm_fmt` byte updates)
+  - requires lowering to a single immutable `fmt` (`printf(fmt, ...)`)
+  - hard-fails when vm lowering needs multiple phases
 - optional `--reject-delta-compiler`: hard-rejects non-vm-pure backend C-side write-delta construction
   (`%w[i] - %w[i-1]`)
 - host-snapshot input note: feeding many input bytes per tick is classified as host-driven hybrid POP
@@ -198,6 +202,14 @@ Experimental notes (`--vm-pure-backend micro|phase|vm`):
 - `vm` backend runtime shape is canonical: `while (*d) { tape-in(size=d[VM_BOUNDARY]); printf(vm_fmt, ...); }`
 - `vm` backend still depends on host ABI details for pointer-byte writes and uses C raw IO (`fread`) as Gate-E tape-in
 - `vm` backend currently uses a 16-bit tape PC (`VM_PC_LO/VM_PC_HI`), so it supports at most 65536 micro-phases
+- `--vm-immutable-fmt` is a stricter vm mode: it forbids `vm_fmt` rewrites and rejects programs that need more than one lowered phase
+
+Why generated files can be very large (compared to hand-written POP):
+- current generator prioritizes explicit/auditable IR over source-size golf
+- each lowered VM phase is materialized as a separate `fmt_k` string (for strict tic-tac-toe: `fmt_0..fmt_1096`)
+- argument lists are fully expanded (many positional args to avoid hidden C-side logic)
+- compliance artifacts are embedded in each output (`tape map`, exact `%...hhn` write fragments, full cheat audit)
+- hand-written POP programs like Carlini's use dense macro compression; this compiler intentionally emits unfolded code
 
 Build generated programs:
 
