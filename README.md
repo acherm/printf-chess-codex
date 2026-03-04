@@ -298,6 +298,12 @@ cc -std=c11 -Wall -Wextra -O2 generated/showcase_tictactoe_playable_strict_subse
 ./tools/ttt_key_to_tape.py 12539 | /tmp/showcase_tictactoe_playable_strict_subset.pop
 ```
 
+Readable output tip (hides `%hhn` padding spaces):
+
+```bash
+./tools/ttt_key_to_tape.py 12539 | /tmp/showcase_tictactoe_playable_strict_subset.pop | tr -d ' ' | sed '/^$/d'
+```
+
 Note:
 - key decoding is moved outside generated C (raw tape-in only inside loop)
 - runtime enforces one-hot selection; multi-cell packets are rejected as illegal
