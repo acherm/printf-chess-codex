@@ -322,6 +322,19 @@ Notes:
 - in `--vm-pure`, `pop_print_if(gate, lit)` uses `gate` directly as precision, so full-string gates should use a large non-zero byte (e.g., `255`)
 - purity classification for this variant is host-driven hybrid POP (`7/10` currently)
 
+Basic snake subset demo (minimal one-row snake):
+
+```bash
+./tools/c2pop.py examples/showcase_snake_basic_subset.c -o generated --purity strict --vm-pure --vm-pure-backend vm
+cc -std=c11 -Wall -Wextra -O2 generated/showcase_snake_basic_subset.pop.c -o /tmp/showcase_snake_basic_subset.pop
+./tools/snake_key_to_tape.py ...d..a...q | /tmp/showcase_snake_basic_subset.pop | tr -d ' ' | sed '/^$/d'
+```
+
+Notes:
+- packet protocol is raw `[quit][left][right]` bytes per tick
+- helper key mapping: `a` = left, `d` = right, `.` = no-op tick, `q` = quit
+- this example is intentionally basic (head-only movement, no collision/growth)
+
 Minimal VM-pure example:
 
 ```bash
