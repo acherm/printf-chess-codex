@@ -4,82 +4,70 @@ Authors: Mathieu Acher and Codex
 
 ## Overall idea
 
-This project builds a basic chess engine in the spirit of
-[`printf-tac-toe`](https://github.com/carlini/printf-tac-toe): one loop,
-one `printf`, and state changes driven by format-string side effects.
-POP aka Printf Oriented Programming. 
+This project now contains a stricter POP version of chess in the spirit of
+[`printf-tac-toe`](https://github.com/carlini/printf-tac-toe):
+the repeated execution step is exactly one `printf(fmt, ARG)`, and `%hhn`
+inside `fmt` mutates the state tape.
 
 Core loop:
 
 ```c
 int main(void) {
-    init_game(&g);
-    while (*d)
-        printf(fmt, pop_a1_zero(), pop_a2_screen(), pop_a3_run_tok(),
-               pop_a4_run_ptr(), pop_a5_side_tok(), pop_a6_side_ptr(),
-               pop_a7_boot_tok(), pop_a8_boot_ptr());
+    while (*d) printf(fmt, ARG);
     return 0;
 }
 ```
 
 ## How it works technically
 
-- `d[]` stores tiny POP control bytes:
-  - `d[0]`: run flag
-  - `d[1]`: side to move
-  - `d[2]`: boot flag
-- `fmt` is one long string using `%hhn` and `%s`.
-- `%1$hhn%1$s` is repeated to force the print counter back to `0 (mod 256)`.
-- Then `%3$s%4$hhn`, `%5$s%6$hhn`, `%7$s%8$hhn` write next values into `d[]`.
-  - Tokens have length 0 or 1 (`""` or `"x"`), so `%hhn` writes 0/1 bytes.
-- `%2$s` prints the full board/status frame (`g.screen`) each cycle.
-
-The side-effect arguments also call the turn driver (`pop_cycle`) once per
-`printf` evaluation, which computes chess state, engine move, and next frame.
+- `d[]` is a POP tape:
+  - `d[0]`: run flag (`while (*d)`)
+  - `d[1]`: frame index
+  - `d[2]`: white prompt precision
+  - `d[3]`: black prompt precision
+- `fmt` performs state writes with `%hhn`:
+  - `%1$*2$s%3$hhn` writes next frame into `d[1]`
+  - `%1$*4$s%5$hhn` writes next run flag into `d[0]`
+  - `%1$*6$s%7$hhn` and `%1$*8$s%9$hhn` write prompt precisions
+- Board rendering is inside `fmt` via `%10$s` (current frame).
+- Prompt branching is done by formatting itself:
+  - `%12$.*14$s%13$.*15$s` prints `white>` or `black>` depending on precision
+    bytes in `d[]` (0 or 6), not via C `if`.
 
 ## Is the spirit preserved?
 
-Mostly yes:
+Yes, for the strict constraints:
 - Single `while (*d) printf(fmt, ...)` control loop
-- Single `fmt` string, `%n`-style state mutation, and byte-level loop control
-
-Not fully pure POP:
-- Chess legality, check detection, and search are implemented in normal C
-  helpers for practicality and readability.
+- No per-tick helper/interpreter call in C
+- Essential state (`d[0..3]`) changes through `%hhn`
+- At least one branch is done by formatting (`%.*s` prompt selection)
 
 ## Coding session report
 
-- First attempt: functional chess engine, but not faithful to POP spirit.
-  - It used a regular per-turn function call structure, even if `printf` was
-    central to rendering.
-- I thus corrected the direction:
-  - enforce the canonical shape `while (*d) printf(fmt, arg);`
-  - require `fmt` as one format string and `arg` as argument-side effects.
-- Refactor stages:
-  - moved loop control to byte state (`d[]`) with `%hhn` writes
-  - concentrated frame output and state update in one `printf`
-  - unfolded helper macros for `fmt`
-  - unfolded `arg` into explicit arguments in the final `printf` call
-- Guidance note:
-  - limited technical guidance, let say key constraint ("respect POP spirit")
-    was decisive and improved both architecture and faithfulness.
+- First attempt was a partial failure regarding POP purity:
+  - chess logic was run in C each cycle (`pop_cycle`-style driver), so `printf`
+    was not the true execution engine.
+- Main correction:
+  - remove per-tick logic functions from the loop path
+  - keep one execution step: `printf(fmt, ARG)`
+  - move meaningful state transitions to `%hhn` writes in `fmt`
+- User guidance was short but decisive:
+  - the strict requirement ("printf must drive execution/state transition")
+    forced the architecture to become much closer to pure POP.
 
 ## Chess features
 
-- Human plays White, engine plays Black
-- Coordinate input: `e2e4`, `g1f3`, `e7e8q`
-- `quit` or `resign` to stop
-- Legal move generation for all pieces
-- Check detection
-- Checkmate and stalemate detection
-- Basic alpha-beta search (fixed depth)
+- Replays a basic opening line as a POP state machine:
+  - `1. e2e4 ... e7e5 2. g1f3 ... b8c6 3. f1b5`
+- Board is shown every step from inside `fmt`
+- Side-to-move prompt alternates (`white>` / `black>`) via formatting-time
+  selection (`%.*s`)
 
 ## Simplifications
 
-- No castling
-- No en passant
-- No threefold repetition / fifty-move rule
-- Promotions handled as queen promotions in practice
+- This strict POP version is not a full legal-move chess engine.
+- It is an execution-model demonstration where `printf` is the VM and chess is
+  the domain payload.
 
 ## Build and run
 
@@ -87,3 +75,60 @@ Not fully pure POP:
 gcc -std=c11 -Wall -Wextra -O2 printf_chess.c -o printf_chess
 ./printf_chess
 ```
+
+## Snake variant (C, printf-oriented)
+
+A stricter POP Snake demo is available in `printf_snake.c`:
+
+- single control loop: `while (*d) printf(fmt, ...)`
+- `%hhn` mutates essential tape bytes (`run`, `steps`, `pos`)
+- core state transition is in `fmt`:
+  - `pos <- pos + 1` via `%hhn`
+  - `steps <- steps - 1` via `%hhn`
+  - `run <- steps` via `%hhn` (loop control)
+- no per-tick C update helper (`tick`/`step`/`render`) is called
+
+Build and run:
+
+```bash
+gcc -std=c11 -Wall -Wextra -O2 printf_snake.c -o printf_snake
+./printf_snake
+```
+
+This strict variant is auto-running (one-row snake).
+
+## Rust variant
+
+A Rust port is available in `src/main.rs`, still using the POP trick with
+`printf` via FFI (`extern "C"`), `%hhn`, and one control loop.
+
+- format string bytes are generated at build time by `build.rs`
+- runtime loop is still one `printf` per cycle with side-effect arguments
+
+Build and run:
+
+```bash
+cargo run
+```
+
+## Java variant (JNI bridge)
+
+Pure Java `System.out.printf` cannot emulate `%hhn` pointer writes.  
+This variant uses a tiny JNI bridge to libc `printf`, so the POP trick is kept:
+
+- Java computes chess state and next frame
+- Native C bridge executes `printf(fmt, ...)` with `%hhn` writes on `d[]`
+
+Files:
+- `java/src/PrintfChessJava.java`
+- `java/native/printfbridge.c`
+- `java/build.sh`
+
+Build and run:
+
+```bash
+./java/build.sh
+java -Dprintfbridge.path=java/build/libprintfbridge.dylib -cp java/build PrintfChessJava
+```
+
+On Linux, use `libprintfbridge.so` instead of `.dylib`.
